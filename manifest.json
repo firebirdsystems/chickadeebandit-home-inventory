@@ -1,0 +1,39 @@
+{
+  "id": "home-inventory",
+  "name": "Home Inventory",
+  "version": "1.0.0",
+  "description": "A searchable record of your possessions for insurance and everyday use: photo, serial number, value, and — most usefully — where each item lives. Names and locations are searchable, so you can always find where you put things.",
+  "entrypoint": "index.html",
+  "runtime": "static",
+  "icon": "📦",
+  "category": "home",
+  "tags": ["inventory", "insurance", "home", "belongings", "organization", "search"],
+  "storage": "db",
+  "db_plaintext_columns": ["name", "location", "category"],
+  "data_access": {
+    "reads": ["family.members"],
+    "writes": []
+  },
+  "permissions": {
+    "default_audience": "everyone",
+    "requires_approval": false
+  },
+  "row_policies": {
+    "items": { "kind": "adult_writable" },
+    "valuations": { "kind": "adult_writable" }
+  },
+  "publishes": ["home_inventory.item_added"],
+  "nav": { "label": "Inventory" },
+  "glance": {
+    "source": {
+      "kind": "sql",
+      "query": "SELECT COUNT(*) AS value FROM app_home_inventory__items LIMIT 1"
+    },
+    "display": { "template": "stat", "value": "value", "label": "items catalogued", "empty_hides": true }
+  },
+  "resource_limits": {
+    "max_db_bytes": 52428800,
+    "max_file_bytes": 10485760,
+    "max_files_bytes": 524288000
+  }
+}
