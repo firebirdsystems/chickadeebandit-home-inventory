@@ -75,6 +75,9 @@
 
 <script type="module">
 import { esc, isAdult, hubConfirm, fmtMoney, formatRelativeDate, createFilesHelper } from "/hub-sdk.js";
+import {
+  CATEGORIES, dollars, toCents, matches as matchesQuery, totalValue, knownLocations, groupItems,
+} from "./logic.js";
 
 const CONTEXT = window.__CONTEXT_URL ?? "";
 const DB = window.__DB_URL ?? "";
@@ -87,13 +90,9 @@ let members = [], me = null;
 let items = [], valuations = [];
 let query = "", groupBy = "location", selectedId = null, error = "", modalEl = null;
 
-const CATEGORIES = ["general", "electronics", "appliance", "furniture", "jewelry", "tools", "kitchen", "clothing", "sports", "collectible", "documents"];
-
 function nowIso() { return new Date().toISOString(); }
 function uid(p) { return `${p}-${crypto.randomUUID()}`; }
 function canEdit() { return isAdult(me); }
-function dollars(cents) { return (Number(cents || 0) / 100).toFixed(2); }
-function toCents(v) { return Math.round((parseFloat(v) || 0) * 100); }
 
 async function db(sql, params = []) {
   if (!DB) return { rows: [] };
@@ -154,18 +153,14 @@ function openModal(html) {
 function closeModal() { modalEl?.remove(); modalEl = null; }
 
 /* ── search / filter ── */
-function matches(it) {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  return [it.name, it.location, it.category, it.brand, it.model, it.serial, it.notes].some(v => (v || "").toLowerCase().includes(q));
-}
+function matches(it) { return matchesQuery(it, query); }
 
 /* ── add / edit ── */
 function itemModal(id) {
   const it = id ? items.find(x => x.id === id) : null;
   const catOpts = CATEGORIES.map(c => `<option value="${c}" ${it?.category === c ? "selected" : ""}>${c[0].toUpperCase() + c.slice(1)}</option>`).join("");
-  const knownLocations = [...new Set(items.map(x => x.location).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const locOpts = knownLocations.map(l => `<option value="${esc(l)}"></option>`).join("");
+  const knownLocationList = knownLocations(items);
+  const locOpts = knownLocationList.map(l => `<option value="${esc(l)}"></option>`).join("");
   const uploadHtml = window.__FILES_URL ? `
     <div class="field">
       <label>Photo</label>
@@ -281,17 +276,10 @@ async function deleteItem(id) {
 }
 
 /* ── render ── */
-function totalValue(list) { return list.reduce((s, it) => s + Number(it.value_cents || 0) * Number(it.quantity || 1), 0); }
-
 function renderList() {
   const filtered = items.filter(matches);
   const total = totalValue(filtered);
-  const groups = {};
-  for (const it of filtered) {
-    const key = (groupBy === "location" ? (it.location || "Unspecified location") : (it.category || "general"));
-    (groups[key] ??= []).push(it);
-  }
-  const keys = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+  const { keys, groups } = groupItems(filtered, groupBy);
   return `
     <div class="topbar">
       <div><h1>📦 Home Inventory</h1><p class="muted tiny">${items.length} items · ${fmtMoney(totalValue(items))} total value</p></div>
