@@ -19,10 +19,28 @@
     "requires_approval": false
   },
   "row_policies": {
-    "items": { "kind": "adult_writable" },
+    "items": {
+      "kind": "adult_writable",
+      "column_read_acls": {
+        "serial": { "visible_to": ["adult"] }
+      }
+    },
     "valuations": { "kind": "adult_writable" }
   },
+  "delete_cascades": {
+    "items": [{ "table": "valuations", "foreign_key": "item_id" }]
+  },
+  "delete_file_columns": {
+    "items": ["photo_id"]
+  },
+  "member_references": {
+    "items": { "column": "created_by", "on_removed": "keep" },
+    "valuations": { "column": "recorded_by", "on_removed": "keep" }
+  },
   "publishes": ["home_inventory.item_added"],
+  "publish_acls": {
+    "home_inventory.item_added": { "require_role": "adult" }
+  },
   "nav": { "label": "Inventory" },
   "glance": {
     "source": {

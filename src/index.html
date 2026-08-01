@@ -268,8 +268,14 @@ async function deleteItem(id) {
   const it = items.find(x => x.id === id);
   if (!(await hubConfirm({ message: `Delete “${it?.name ?? "this item"}”?`, description: "Its valuation history is removed too.", destructive: true, confirmLabel: "Delete" }))) return;
   try {
-    if (DB) { await db("DELETE FROM app_home_inventory__valuations WHERE item_id=?", [id]); await db("DELETE FROM app_home_inventory__items WHERE id=?", [id]); }
-    if (it?.photo_id) files.delete(it.photo_id).catch(() => {});
+    // One statement. `delete_cascades` removes the valuation history inside the
+    // same transaction (the two-statement batch this replaces did that much),
+    // and `delete_file_columns` reclaims the item's photo through the hub's
+    // durable outbox — which the old trailing `files.delete(...).catch()` could
+    // not: it fired after the row was already gone, so a closed tab or a failed
+    // request leaked the bytes with nothing left to name them by. The batch form
+    // now refuses this DELETE outright rather than skipping either half.
+    if (DB) await db("DELETE FROM app_home_inventory__items WHERE id=?", [id]);
     items = items.filter(x => x.id !== id); valuations = valuations.filter(v => v.item_id !== id);
     selectedId = null; render();
   } catch (e) { showError(e.message); }
