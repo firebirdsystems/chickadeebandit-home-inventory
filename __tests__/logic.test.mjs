@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  CATEGORIES, dollars, toCents, matches, totalValue, knownLocations, groupItems,
+  CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
 } from "../src/logic.js";
 
 describe("dollars / toCents", () => {
@@ -14,15 +14,14 @@ describe("dollars / toCents", () => {
   });
 });
 
-describe("matches", () => {
+describe("searchableFields", () => {
   const item = { name: "Drill", location: "Garage", category: "tools", brand: "Makita", model: "X", serial: "SN9", notes: "" };
-  it("matches with empty query", () => expect(matches(item, "")).toBe(true));
-  it("searches across fields case-insensitively", () => {
-    expect(matches(item, "makita")).toBe(true);
-    expect(matches(item, "garage")).toBe(true);
-    expect(matches(item, "sn9")).toBe(true);
+  it("reaches brand, location and serial, not just the name", () => {
+    const fields = searchableFields(item);
+    expect(fields).toContain("Makita");
+    expect(fields).toContain("Garage");
+    expect(fields).toContain("SN9");
   });
-  it("returns false when nothing matches", () => expect(matches(item, "zzz")).toBe(false));
 });
 
 describe("totalValue", () => {

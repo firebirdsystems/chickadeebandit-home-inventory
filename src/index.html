@@ -74,9 +74,9 @@
 <div class="app"><div id="root" class="empty">Loading…</div></div>
 
 <script type="module">
-import { esc, isAdult, hubConfirm, fmtMoney, formatRelativeDate, createFilesHelper } from "/hub-sdk.js";
+import { esc, isAdult, hubConfirm, fmtMoney, formatRelativeDate, createFilesHelper, searchMatch } from "/hub-sdk.js";
 import {
-  CATEGORIES, dollars, toCents, matches as matchesQuery, totalValue, knownLocations, groupItems,
+  CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
 } from "./logic.js";
 
 const CONTEXT = window.__CONTEXT_URL ?? "";
@@ -153,7 +153,7 @@ function openModal(html) {
 function closeModal() { modalEl?.remove(); modalEl = null; }
 
 /* ── search / filter ── */
-function matches(it) { return matchesQuery(it, query); }
+function matches(it) { return !query || searchMatch(query, searchableFields(it)); }
 
 /* ── add / edit ── */
 function itemModal(id) {

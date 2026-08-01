@@ -11,10 +11,13 @@ export function toCents(v) {
   return Math.round((parseFloat(v) || 0) * 100);
 }
 
-export function matches(it, query) {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  return [it.name, it.location, it.category, it.brand, it.model, it.serial, it.notes].some(v => (v || "").toLowerCase().includes(q));
+/**
+ * Fields the in-app search matches against (see hub-sdk `searchMatch`). Brand,
+ * model and serial are in here because an insurance claim is worked from the
+ * label on the thing, not from whatever it was catalogued as.
+ */
+export function searchableFields(it) {
+  return [it.name, it.location, it.category, it.brand, it.model, it.serial, it.notes];
 }
 
 export function totalValue(list) {
