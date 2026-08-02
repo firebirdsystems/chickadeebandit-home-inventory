@@ -18,6 +18,36 @@
     "default_audience": "everyone",
     "requires_approval": false
   },
+  "automation_actions": {
+    "add_item": {
+      "title": "Catalogue an item",
+      "description": "Add something to the home inventory when another app's event fires - a warranty registered, a purchase logged, equipment retired from the checkout list.",
+      "params": {
+        "created_by": { "type": "member", "label": "Catalogued by", "required": true },
+        "name": { "type": "text", "label": "What it is", "required": true },
+        "category": { "type": "text", "label": "Category", "default": "general" },
+        "location": { "type": "text", "label": "Where it is", "default": "" }
+      },
+      "dedupe": { "table": "items", "column": "source_event_id" },
+      "steps": [
+        {
+          "op": "insert",
+          "table": "items",
+          "values": {
+            "id": "$uuid",
+            "name": ":name",
+            "category": ":category",
+            "location": ":location",
+            "created_by": ":created_by",
+            "created_by_name": "Automation",
+            "created_at": "$now",
+            "updated_at": "$now",
+            "source_event_id": "$event_id"
+          }
+        }
+      ]
+    }
+  },
   "row_policies": {
     "items": {
       "kind": "adult_writable",
