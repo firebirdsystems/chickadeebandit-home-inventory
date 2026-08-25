@@ -1,7 +1,7 @@
 {
   "id": "home-inventory",
   "name": "Home Inventory",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A searchable record of your possessions for insurance and everyday use: photo, serial number, value, and — most usefully — where each item lives. Names and locations are searchable, so you can always find where you put things.",
   "entrypoint": "index.html",
   "runtime": "static",
@@ -48,6 +48,20 @@
       ]
     }
   },
+  "suggested_automations": [
+    {
+      "title": "Catalogue items registered for warranty",
+      "description": "Something logged in the warranty vault is also something the household owns \u2014 it lands in the inventory with its category, so the insurance list and the warranty list do not have to be kept by hand in two places.",
+      "trigger_event": "warranty.item_added",
+      "target_app_id": "home-inventory",
+      "action_id": "add_item",
+      "param_map": {
+        "created_by": { "kind": "payload_field", "value": "created_by" },
+        "name": { "kind": "payload_field", "value": "name" },
+        "category": { "kind": "payload_field", "value": "category" }
+      }
+    }
+  ],
   "row_policies": {
     "items": {
       "kind": "adult_writable",
