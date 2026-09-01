@@ -122,11 +122,38 @@ function seedDemo() {
 
 async function loadData() {
   if (!DB) { seedDemo(); return; }
-  const [it, va] = await Promise.all([
-    db("SELECT * FROM app_home_inventory__items ORDER BY name ASC"),
-    db("SELECT * FROM app_home_inventory__valuations ORDER BY recorded_at ASC"),
-  ]);
-  items = it.rows; valuations = va.rows;
+  const it = await db("SELECT * FROM app_home_inventory__items ORDER BY name ASC");
+  items = it.rows;
+}
+
+// Valuation history is append-only and only ever shown in one item's detail
+// sheet, so it is fetched per item on first open instead of preloaded whole.
+// The map caches the in-flight promise (not a done flag) so a second open
+// during the fetch can't start a duplicate; merges dedup by id because a
+// just-added valuation is already in the local array.
+//
+// A failed load keeps its entry. Clearing it here would spin: renderDetail
+// re-arms the fetch on every render and re-renders when it settles, so a
+// delete-on-failure turns one dropped request into an unbounded retry loop for
+// as long as the sheet stays open. Instead the entry is dropped when the sheet
+// CLOSES, which retries at most once per open and only ever because a person
+// asked for it. The failure is surfaced rather than shown as an empty history —
+// "no valuations recorded" is a claim this read is no longer entitled to make.
+const valuationLoads = new Map();
+let valuationError = "";
+function loadValuationsFor(itemId) {
+  let p = valuationLoads.get(itemId);
+  if (!p) {
+    p = db("SELECT * FROM app_home_inventory__valuations WHERE item_id = ? ORDER BY recorded_at ASC", [itemId])
+      .then((res) => {
+        const seen = new Set(valuations.map((v) => v.id));
+        valuations = [...valuations, ...res.rows.filter((r) => !seen.has(r.id))];
+        valuationError = "";
+      })
+      .catch(() => { valuationError = itemId; });
+    valuationLoads.set(itemId, p);
+  }
+  return p;
 }
 
 async function init() {
@@ -325,6 +352,7 @@ function renderCard(it) {
 function renderDetail() {
   const it = items.find(x => x.id === selectedId);
   if (!it) { selectedId = null; return renderList(); }
+  if (DB && !valuationLoads.has(it.id)) loadValuationsFor(it.id).then(render);
   const hist = valuations.filter(v => v.item_id === it.id).sort((a, b) => b.recorded_at.localeCompare(a.recorded_at));
   return `
     <button class="btn btn-ghost btn-sm back" data-back>← Back</button>
@@ -350,7 +378,7 @@ function renderDetail() {
       </div>` : ""}
       <h2 style="margin:16px 0 4px;font-size:.95rem">Valuation history</h2>
       <div class="hist">
-        ${hist.length ? hist.map(v => `<div class="hist-row"><span><strong>${esc(fmtMoney(v.value_cents))}</strong> ${v.note ? `<span class="muted">— ${esc(v.note)}</span>` : ""}</span><span class="muted tiny">${esc(formatRelativeDate(v.recorded_at))}</span></div>`).join("") : `<div class="tiny muted" style="padding:8px 0">No valuation records yet.</div>`}
+        ${hist.length ? hist.map(v => `<div class="hist-row"><span><strong>${esc(fmtMoney(v.value_cents))}</strong> ${v.note ? `<span class="muted">— ${esc(v.note)}</span>` : ""}</span><span class="muted tiny">${esc(formatRelativeDate(v.recorded_at))}</span></div>`).join("") : valuationError === it.id ? `<div class="tiny muted" style="padding:8px 0">Could not load the valuation history. Go back and reopen to try again.</div>` : `<div class="tiny muted" style="padding:8px 0">No valuation records yet.</div>`}
       </div>
     </div>`;
 }
@@ -372,7 +400,12 @@ document.addEventListener("click", e => {
   const t = e.target.closest("button, [data-open]");
   if (!t) return;
   if (t.dataset.open) { selectedId = t.dataset.open; error = ""; render(); return; }
-  if (t.dataset.back !== undefined) { selectedId = null; error = ""; render(); return; }
+  if (t.dataset.back !== undefined) {
+    // Closing is the retry boundary: drop a failed load so reopening refetches,
+    // while a load that succeeded stays cached.
+    if (valuationError) { valuationLoads.delete(valuationError); valuationError = ""; }
+    selectedId = null; error = ""; render(); return;
+  }
   if (t.dataset.close !== undefined) { closeModal(); return; }
   if (t.dataset.group) { groupBy = t.dataset.group; render(); return; }
   if (t.dataset.add !== undefined) return itemModal();

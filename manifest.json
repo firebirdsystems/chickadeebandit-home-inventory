@@ -10,8 +10,7 @@
   "tags": ["inventory", "insurance", "home", "belongings", "organization", "search"],
   "storage": "db",
   "preload": {
-    "items": {"sql": "SELECT * FROM app_home_inventory__items ORDER BY name ASC"},
-    "valuations": {"sql": "SELECT * FROM app_home_inventory__valuations ORDER BY recorded_at ASC"}
+    "items": {"sql": "SELECT * FROM app_home_inventory__items ORDER BY name ASC"}
   },
   "db_plaintext_columns": ["name", "location", "category"],
   "data_access": {
