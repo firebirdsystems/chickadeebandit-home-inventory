@@ -1,5 +1,7 @@
 # Home Inventory
 
+A [Chickadee Bandit](https://chickadeebandit.com/app-library/home-inventory) app.
+
 A searchable record of your possessions — the unsexy app you're grateful for the one time you
 need it (a claim, a move, a "where did I put that?").
 
