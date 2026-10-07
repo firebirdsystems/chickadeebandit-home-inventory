@@ -74,7 +74,7 @@
 <div class="app"><div id="root" class="empty">Loading…</div></div>
 
 <script type="module">
-import { esc, isAdult, hubConfirm, fmtMoney, formatRelativeDate, createFilesHelper, searchMatch } from "/hub-sdk.js";
+import { esc, isAdult, hubConfirm, fmtMoney, formatRelativeDate, createFilesHelper, searchMatch, glyph } from "/hub-sdk.js";
 import {
   CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
 } from "./logic.js";
@@ -191,7 +191,7 @@ function itemModal(id) {
   const uploadHtml = window.__FILES_URL ? `
     <div class="field">
       <label>Photo</label>
-      <label class="upload-area" for="f-photo">📷 ${it?.photo_id ? "Replace photo" : "Attach a photo"}</label>
+      <label class="upload-area" for="f-photo">${glyph("camera")} ${it?.photo_id ? "Replace photo" : "Attach a photo"}</label>
       <input id="f-photo" type="file" accept="image/*" style="display:none">
       <img id="photo-preview" style="display:${it?.photo_id ? "block" : "none"};margin-top:8px;max-width:100%;border-radius:8px" src="${it?.photo_id ? esc(files.url(it.photo_id)) : ""}">
     </div>` : "";
@@ -315,7 +315,7 @@ function renderList() {
   const { keys, groups } = groupItems(filtered, groupBy);
   return `
     <div class="topbar">
-      <div><h1>📦 Home Inventory</h1><p class="muted tiny">${items.length} items · ${fmtMoney(totalValue(items))} total value</p></div>
+      <div><h1>${glyph("box")} Home Inventory</h1><p class="muted tiny">${items.length} items · ${fmtMoney(totalValue(items))} total value</p></div>
       ${canEdit() ? `<button class="btn" data-add>Add item</button>` : ""}
     </div>
     ${error ? `<div class="error">${esc(error)}</div>` : ""}
@@ -328,7 +328,7 @@ function renderList() {
       ${query ? `<span class="tiny muted">${filtered.length} match${filtered.length === 1 ? "" : "es"} · ${fmtMoney(total)}</span>` : ""}
     </div>
     ${filtered.length ? keys.map(k => `
-      <div class="group-head">${groupBy === "location" ? "📍" : "🏷️"} ${esc(k)} <span class="muted" style="font-weight:600">· ${groups[k].length}</span></div>
+      <div class="group-head">${glyph(groupBy === "location" ? "location" : "tag")} ${esc(k)} <span class="muted" style="font-weight:600">· ${groups[k].length}</span></div>
       <div class="grid">${groups[k].map(renderCard).join("")}</div>
     `).join("") : `<div class="empty">${items.length ? "No items match your search." : "Nothing catalogued yet. Add your first item."}</div>`}
   `;
@@ -344,7 +344,7 @@ function renderCard(it) {
       <div class="card-body">
         <div class="card-name">${esc(it.name)}</div>
         <div class="card-meta">${esc(it.category)}${it.quantity > 1 ? ` · ×${esc(String(it.quantity))}` : ""}${it.value_cents ? ` · <span class="value">${esc(fmtMoney(it.value_cents))}</span>` : ""}</div>
-        ${it.location ? `<span class="loc-pill">📍 ${esc(it.location)}</span>` : ""}
+        ${it.location ? `<span class="loc-pill">${glyph("location")} ${esc(it.location)}</span>` : ""}
       </div>
     </article>`;
 }
@@ -360,7 +360,7 @@ function renderDetail() {
     <div class="card" style="cursor:default;padding:16px">
       ${it.photo_id ? `<img class="detail-photo" src="${esc(files.url(it.photo_id))}" alt="">` : ""}
       <div class="topbar" style="margin-top:${it.photo_id ? "12px" : "0"}">
-        <div><h1 style="font-size:1.2rem">${esc(it.name)}</h1><span class="loc-pill">📍 ${esc(it.location || "No location set")}</span></div>
+        <div><h1 style="font-size:1.2rem">${esc(it.name)}</h1><span class="loc-pill">${glyph("location")} ${esc(it.location || "No location set")}</span></div>
         ${it.value_cents ? `<div style="text-align:right"><div class="value" style="font-size:1.2rem">${esc(fmtMoney(it.value_cents))}</div>${it.quantity > 1 ? `<div class="tiny muted">each · ×${esc(String(it.quantity))}</div>` : ""}</div>` : ""}
       </div>
       <dl class="kv">
