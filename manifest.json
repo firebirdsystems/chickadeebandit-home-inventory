@@ -77,8 +77,12 @@
   "delete_cascades": {
     "items": [{ "table": "valuations", "foreign_key": "item_id" }]
   },
+  "required_capabilities": ["image_cutout"],
   "delete_file_columns": {
-    "items": ["photo_id"]
+    "items": ["photo_id", "thumb_file_id", "cutout_file_id", "cutout_thumb_file_id"]
+  },
+  "update_file_columns": {
+    "items": ["photo_id", "thumb_file_id", "cutout_file_id", "cutout_thumb_file_id"]
   },
   "member_references": {
     "items": { "column": "created_by", "on_removed": "keep" },

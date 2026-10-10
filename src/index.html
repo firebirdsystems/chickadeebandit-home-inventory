@@ -34,6 +34,8 @@
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
     .card:hover { border-color: var(--border-mid); box-shadow: 0 5px 14px rgba(15,23,42,.08); }
     .thumb { height: 120px; background: var(--bg) center/cover no-repeat; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #94a3b8; }
+    /* A cutout is transparent and drawn whole, never cropped to fill. */
+    .thumb.cutout { background-size: contain; }
     .card-body { padding: 11px 12px; }
     .card-name { font-weight: 700; }
     .card-meta { color: var(--muted); font-size: .8rem; margin-top: 2px; }
@@ -48,6 +50,7 @@
     .empty { text-align: center; padding: 40px 16px; color: var(--muted); }
     .error { background: var(--hub-tint-danger, #fee2e2); color: var(--hub-tint-danger-fg, #b91c1c); padding: 9px 12px; border-radius: 8px; margin-bottom: 10px; font-size: .86rem; }
     .detail-photo { width: 100%; max-height: 300px; object-fit: cover; border-radius: var(--radius); background: var(--bg); }
+    .detail-photo.cutout { object-fit: contain; }
     .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; margin: 12px 0; }
     .kv dt { color: var(--muted); font-size: .82rem; font-weight: 700; }
     .kv dd { font-size: .9rem; }
@@ -77,6 +80,7 @@
 import { esc, isAdult, hubConfirm, fmtMoney, formatRelativeDate, createFilesHelper, searchMatch, glyph } from "/hub-sdk.js";
 import {
   CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
+  shownPhotoId, tilePhotoId, cutoutRefusal,
 } from "./logic.js";
 
 const CONTEXT = window.__CONTEXT_URL ?? "";
@@ -89,6 +93,8 @@ const files = createFilesHelper(window.__FILES_URL ?? "");
 let members = [], me = null;
 let items = [], valuations = [];
 let query = "", groupBy = "location", selectedId = null, error = "", modalEl = null;
+// The item whose photo is having its background removed or put back, if any.
+let cutoutBusy = "";
 
 function nowIso() { return new Date().toISOString(); }
 function uid(p) { return `${p}-${crypto.randomUUID()}`; }
@@ -239,20 +245,26 @@ async function submitItem(form) {
   };
   try {
     let photoId = id ? (items.find(x => x.id === id)?.photo_id ?? "") : "";
+    let thumbId = null;
     const file = document.getElementById("f-photo")?.files?.[0];
-    if (file) { const up = await files.upload(file); photoId = up.id; }
+    // The hub keeps a small copy with the photo, for the grid.
+    if (file) { const up = await files.upload(file, { thumbnail: true }); photoId = up.id; thumbId = up.thumbnailId ?? null; }
+    // A new photo has its own small copy and no cutout. All four columns
+    // change in the one UPDATE, so the hub reclaims the old photo and what was
+    // made from it together.
+    const newCopies = file ? "thumb_file_id=?, cutout_file_id=NULL, cutout_thumb_file_id=NULL, " : "";
 
     if (id) {
       const it = items.find(x => x.id === id);
       const prevValue = it.value_cents;
-      if (DB) await db(`UPDATE app_home_inventory__items SET name=?, location=?, category=?, value_cents=?, quantity=?, brand=?, model=?, serial=?, purchased_at=?, notes=?, photo_id=?, updated_at=? WHERE id=?`,
-        [vals.name, vals.location, vals.category, vals.value_cents, vals.quantity, vals.brand, vals.model, vals.serial, vals.purchased_at, vals.notes, photoId, nowIso(), id]);
-      Object.assign(it, vals, { photo_id: photoId });
+      if (DB) await db(`UPDATE app_home_inventory__items SET name=?, location=?, category=?, value_cents=?, quantity=?, brand=?, model=?, serial=?, purchased_at=?, notes=?, photo_id=?, ${newCopies}updated_at=? WHERE id=?`,
+        [vals.name, vals.location, vals.category, vals.value_cents, vals.quantity, vals.brand, vals.model, vals.serial, vals.purchased_at, vals.notes, photoId, ...(file ? [thumbId] : []), nowIso(), id]);
+      Object.assign(it, vals, { photo_id: photoId }, file ? { thumb_file_id: thumbId, cutout_file_id: null, cutout_thumb_file_id: null } : {});
       if (vals.value_cents !== prevValue) await addValuation(id, vals.value_cents, "Value updated");
     } else {
-      const row = { id: uid("i"), ...vals, photo_id: photoId, created_by: me.id, created_by_name: me.name, created_at: nowIso() };
-      if (DB) await db(`INSERT INTO app_home_inventory__items (id, name, location, category, value_cents, quantity, brand, model, serial, purchased_at, notes, photo_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [row.id, row.name, row.location, row.category, row.value_cents, row.quantity, row.brand, row.model, row.serial, row.purchased_at, row.notes, row.photo_id, row.created_by, row.created_by_name, row.created_at]);
+      const row = { id: uid("i"), ...vals, photo_id: photoId, thumb_file_id: thumbId, created_by: me.id, created_by_name: me.name, created_at: nowIso() };
+      if (DB) await db(`INSERT INTO app_home_inventory__items (id, name, location, category, value_cents, quantity, brand, model, serial, purchased_at, notes, photo_id, thumb_file_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [row.id, row.name, row.location, row.category, row.value_cents, row.quantity, row.brand, row.model, row.serial, row.purchased_at, row.notes, row.photo_id, row.thumb_file_id, row.created_by, row.created_by_name, row.created_at]);
       items = [...items, row];
       if (row.value_cents) await addValuation(row.id, row.value_cents, "Initial value");
       publish("home_inventory.item_added", { id: row.id, name: row.name });
@@ -289,6 +301,38 @@ async function submitReval(form) {
     it.value_cents = valueCents;
     closeModal(); render();
   } catch (e) { btn.disabled = false; btn.textContent = "Record"; showError(e.message); }
+}
+
+/* ── photo background ── */
+async function removeBackground(id) {
+  const it = items.find(x => x.id === id);
+  if (!it?.photo_id || cutoutBusy) return;
+  const photoId = it.photo_id;
+  cutoutBusy = id; error = ""; render();
+  try {
+    // The hub also keeps a small copy of the cutout, for the grid.
+    const cut = await files.cutout(photoId, { thumbnail: true });
+    const smallId = cut.thumbnailId ?? null;
+    // Kept only if the item still shows the photo it was made from. A cutout of
+    // a photo replaced in the meantime is reclaimed by the hub with that photo.
+    const { changed } = await db("UPDATE app_home_inventory__items SET cutout_file_id=?, cutout_thumb_file_id=?, updated_at=? WHERE id=? AND photo_id=?",
+      [cut.id, smallId, nowIso(), id, photoId]);
+    if (changed) Object.assign(it, { cutout_file_id: cut.id, cutout_thumb_file_id: smallId });
+  } catch (e) { error = e.status ? cutoutRefusal(e.status, e.detail) : e.message; }
+  cutoutBusy = ""; render();
+}
+
+async function restoreBackground(id) {
+  const it = items.find(x => x.id === id);
+  if (!it?.cutout_file_id || cutoutBusy) return;
+  cutoutBusy = id; error = ""; render();
+  try {
+    // The hub reclaims the cutout and its small copy once no row names them.
+    // The photo is untouched.
+    await db("UPDATE app_home_inventory__items SET cutout_file_id=NULL, cutout_thumb_file_id=NULL, updated_at=? WHERE id=?", [nowIso(), id]);
+    Object.assign(it, { cutout_file_id: null, cutout_thumb_file_id: null });
+  } catch (e) { error = e.message; }
+  cutoutBusy = ""; render();
 }
 
 async function deleteItem(id) {
@@ -336,7 +380,7 @@ function renderList() {
 
 function renderCard(it) {
   const thumb = it.photo_id
-    ? `<div class="thumb" style="background-image:url('${esc(files.url(it.photo_id))}')"></div>`
+    ? `<div class="thumb${it.cutout_file_id ? " cutout" : ""}" style="background-image:url('${esc(files.url(tilePhotoId(it)))}')"></div>`
     : "";
   return `
     <article class="card" data-open="${esc(it.id)}">
@@ -358,7 +402,7 @@ function renderDetail() {
     <button class="btn btn-ghost btn-sm back" data-back>← Back</button>
     ${error ? `<div class="error">${esc(error)}</div>` : ""}
     <div class="card" style="cursor:default;padding:16px">
-      ${it.photo_id ? `<img class="detail-photo" src="${esc(files.url(it.photo_id))}" alt="">` : ""}
+      ${it.photo_id ? `<img class="detail-photo${it.cutout_file_id ? " cutout" : ""}" src="${esc(files.url(shownPhotoId(it)))}" alt="">` : ""}
       <div class="topbar" style="margin-top:${it.photo_id ? "12px" : "0"}">
         <div><h1 style="font-size:1.2rem">${esc(it.name)}</h1><span class="loc-pill">${glyph("location")} ${esc(it.location || "No location set")}</span></div>
         ${it.value_cents ? `<div style="text-align:right"><div class="value" style="font-size:1.2rem">${esc(fmtMoney(it.value_cents))}</div>${it.quantity > 1 ? `<div class="tiny muted">each · ×${esc(String(it.quantity))}</div>` : ""}</div>` : ""}
@@ -374,6 +418,9 @@ function renderDetail() {
       ${canEdit() ? `<div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-sm" data-edit="${esc(it.id)}">Edit</button>
         <button class="btn btn-ghost btn-sm" data-reval="${esc(it.id)}">Record new value</button>
+        ${it.photo_id && window.__FILES_URL ? (it.cutout_file_id
+          ? `<button class="btn btn-ghost btn-sm" data-restore-bg="${esc(it.id)}" ${cutoutBusy ? "disabled" : ""}>Show photo as taken</button>`
+          : `<button class="btn btn-ghost btn-sm" data-remove-bg="${esc(it.id)}" ${cutoutBusy ? "disabled" : ""}>${cutoutBusy === it.id ? "Removing background…" : "Remove background"}</button>`) : ""}
         <button class="btn btn-danger btn-sm" data-del="${esc(it.id)}">Delete</button>
       </div>` : ""}
       <h2 style="margin:16px 0 4px;font-size:.95rem">Valuation history</h2>
@@ -411,6 +458,8 @@ document.addEventListener("click", e => {
   if (t.dataset.add !== undefined) return itemModal();
   if (t.dataset.edit) return itemModal(t.dataset.edit);
   if (t.dataset.reval) return revalueModal(t.dataset.reval);
+  if (t.dataset.removeBg) return removeBackground(t.dataset.removeBg);
+  if (t.dataset.restoreBg) return restoreBackground(t.dataset.restoreBg);
   if (t.dataset.del) return deleteItem(t.dataset.del);
 });
 

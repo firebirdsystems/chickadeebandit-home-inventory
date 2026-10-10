@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
+  shownPhotoId, tilePhotoId, cutoutRefusal,
 } from "../src/logic.js";
 
 describe("dollars / toCents", () => {
@@ -60,4 +61,48 @@ describe("groupItems", () => {
 
 describe("CATEGORIES", () => {
   it("includes the default category first", () => expect(CATEGORIES[0]).toBe("general"));
+});
+
+describe("shownPhotoId", () => {
+  it("draws the cutout when the item has one, else the photo as taken", () => {
+    expect(shownPhotoId({ photo_id: "p1", cutout_file_id: "c1" })).toBe("c1");
+    expect(shownPhotoId({ photo_id: "p1", cutout_file_id: null })).toBe("p1");
+    expect(shownPhotoId({ photo_id: "p1" })).toBe("p1");
+    expect(shownPhotoId({ photo_id: "" })).toBe("");
+  });
+});
+
+describe("cutoutRefusal", () => {
+  it("tells the monthly allowance apart from the per-minute limit", () => {
+    expect(cutoutRefusal(429, { limit: 100 })).toBe("This month's 100 photo cutouts are used up. The photo is kept as taken.");
+    expect(cutoutRefusal(429, { error: "Too many requests" })).toBe("Too many requests just now. Try again in a minute.");
+    expect(cutoutRefusal(429)).toBe("Too many requests just now. Try again in a minute.");
+  });
+  it("says why for each refusal the hub can give", () => {
+    expect(cutoutRefusal(409)).toMatch(/already being removed/);
+    expect(cutoutRefusal(402)).toMatch(/active plan/);
+    expect(cutoutRefusal(503)).toMatch(/unavailable right now/);
+    expect(cutoutRefusal(413)).toMatch(/too large/);
+    expect(cutoutRefusal(415)).toMatch(/JPEG, PNG or WebP/);
+    expect(cutoutRefusal(507)).toMatch(/no storage left/);
+  });
+  it("falls back to a plain sentence for anything else", () => {
+    expect(cutoutRefusal(500)).toBe("The background could not be removed.");
+    expect(cutoutRefusal(undefined)).toBe("The background could not be removed.");
+  });
+});
+
+describe("tilePhotoId", () => {
+  it("draws the small copy of the picture shown, else that picture", () => {
+    expect(tilePhotoId({ photo_id: "p1", thumb_file_id: "t1", cutout_file_id: "c1", cutout_thumb_file_id: "ct1" })).toBe("ct1");
+    expect(tilePhotoId({ photo_id: "p1", thumb_file_id: "t1", cutout_file_id: null })).toBe("t1");
+    expect(tilePhotoId({ photo_id: "p1", thumb_file_id: null })).toBe("p1");
+    expect(tilePhotoId({ photo_id: "p1" })).toBe("p1");
+    expect(tilePhotoId(null)).toBe("");
+  });
+  it("never shows the photo's small copy for a cutout", () => {
+    // A cutout with no small copy of its own is drawn whole.
+    expect(tilePhotoId({ photo_id: "p1", thumb_file_id: "t1", cutout_file_id: "c1", cutout_thumb_file_id: null })).toBe("c1");
+    expect(tilePhotoId({ photo_id: "p1", thumb_file_id: "t1", cutout_file_id: "c1" })).toBe("c1");
+  });
 });
