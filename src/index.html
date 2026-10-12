@@ -184,6 +184,14 @@ function publish(type, payload) {
   fetch(EVENTS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source_app_id: APP_ID, type, payload }) }).catch(() => {});
 }
 function showError(msg) { error = msg; render(); }
+// A failed write is said in this app's words; the error itself goes to the
+// console. A photo the hub would not take (too large, a type it does not
+// store, no storage left) keeps the hub's wording, which says what to change.
+function writeFailed(e, line) {
+  console.error("[home-inventory]", e);
+  return line;
+}
+const uploadRefused = (e) => e?.status === 507 || (e?.status >= 400 && e?.status < 500);
 
 /* ── modal ── */
 function openModal(html) {
@@ -282,7 +290,7 @@ async function submitItem(form) {
       publish("home_inventory.item_added", { id: row.id, name: row.name });
     }
     closeModal(); render();
-  } catch (e) { btn.disabled = false; btn.textContent = id ? "Save" : "Add item"; showError(e.message); }
+  } catch (e) { btn.disabled = false; btn.textContent = id ? "Save" : "Add item"; showError(uploadRefused(e) && e.message ? e.message : writeFailed(e, "Couldn’t save the item — try again.")); }
 }
 
 async function addValuation(itemId, valueCents, note) {
@@ -312,7 +320,7 @@ async function submitReval(form) {
     if (DB) await db(`UPDATE app_home_inventory__items SET value_cents=?, updated_at=? WHERE id=?`, [valueCents, nowIso(), id]);
     it.value_cents = valueCents;
     closeModal(); render();
-  } catch (e) { btn.disabled = false; btn.textContent = "Record"; showError(e.message); }
+  } catch (e) { btn.disabled = false; btn.textContent = "Record"; showError(writeFailed(e, "Couldn’t record the value — try again.")); }
 }
 
 /* ── photo background ── */
@@ -330,7 +338,7 @@ async function removeBackground(id) {
     const { changed } = await db("UPDATE app_home_inventory__items SET cutout_file_id=?, cutout_thumb_file_id=?, updated_at=? WHERE id=? AND photo_id=?",
       [cut.id, smallId, nowIso(), id, photoId]);
     if (changed) Object.assign(it, { cutout_file_id: cut.id, cutout_thumb_file_id: smallId });
-  } catch (e) { error = e.status ? cutoutRefusal(e.status, e.detail) : e.message; }
+  } catch (e) { error = e.status ? cutoutRefusal(e.status, e.detail) : writeFailed(e, "Couldn’t remove the background — try again."); }
   cutoutBusy = ""; render();
 }
 
@@ -343,7 +351,7 @@ async function restoreBackground(id) {
     // The photo is untouched.
     await db("UPDATE app_home_inventory__items SET cutout_file_id=NULL, cutout_thumb_file_id=NULL, updated_at=? WHERE id=?", [nowIso(), id]);
     Object.assign(it, { cutout_file_id: null, cutout_thumb_file_id: null });
-  } catch (e) { error = e.message; }
+  } catch (e) { error = writeFailed(e, "Couldn’t restore the background — try again."); }
   cutoutBusy = ""; render();
 }
 
@@ -361,7 +369,7 @@ async function deleteItem(id) {
     if (DB) await db("DELETE FROM app_home_inventory__items WHERE id=?", [id]);
     items = items.filter(x => x.id !== id); valuations = valuations.filter(v => v.item_id !== id);
     selectedId = null; render();
-  } catch (e) { showError(e.message); }
+  } catch (e) { showError(writeFailed(e, "Couldn’t delete the item — try again.")); }
 }
 
 /* ── render ── */
