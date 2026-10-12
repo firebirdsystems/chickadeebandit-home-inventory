@@ -70,6 +70,8 @@
     .modal h3 { margin-bottom: 14px; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
     @media (max-width: 520px) { .two { grid-template-columns: 1fr; } .kv { grid-template-columns: 100px 1fr; } }
+    .load-error { margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; background: var(--hub-tint-danger, #fee2e2); color: var(--hub-tint-danger-fg, #b91c1c); font-size: 0.9rem; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    .load-error-retry { background: none; border: 1px solid currentColor; border-radius: 8px; padding: 5px 10px; font: inherit; font-weight: 600; color: inherit; cursor: pointer; flex-shrink: 0; }
   </style>
   <base href="/run/home-inventory/">
 </head>
@@ -103,14 +105,22 @@ function canEdit() { return isAdult(me); }
 async function db(sql, params = []) {
   if (!DB) return { rows: [] };
   const res = await fetch(DB, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql, params }) });
-  const json = await res.json();
-  if (json.error) throw new Error(json.error);
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
   return json;
 }
 
 async function loadMembers() {
   if (!CONTEXT) { members = [{ id: "demo-1", name: "Alex", role: "adult" }, { id: "demo-2", name: "Jordan", role: "adult" }]; }
-  else { try { const res = await fetch(`${CONTEXT}?keys=family.members`); members = ((await res.json())["family.members"]) ?? []; } catch { members = []; } }
+  else {
+    // A failed read throws: it is a failed load, never a household of nobody.
+    const res = await fetch(`${CONTEXT}?keys=family.members`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok || data === null || typeof data !== "object" || Array.isArray(data)) throw new Error("Couldn’t reach the hub. Try again.");
+    // A 200 that names the key in `$errors` is the hub saying it could not read it.
+    if (Array.isArray(data.$errors) && data.$errors.includes("family.members")) throw new Error("Couldn’t reach the hub. Try again.");
+    members = data["family.members"] ?? [];
+  }
   me = HUB_MEMBER ?? members[0] ?? { id: "guest", name: "Guest", role: "adult" };
 }
 
@@ -162,9 +172,11 @@ function loadValuationsFor(itemId) {
   return p;
 }
 
+// Set when the first load fails, cleared when a load succeeds.
+let loadFailed = false;
 async function init() {
-  try { await Promise.all([loadMembers(), loadData()]); }
-  catch (e) { error = e.message; }
+  try { await Promise.all([loadMembers(), loadData()]); loadFailed = false; }
+  catch { loadFailed = true; }
   render();
 }
 
@@ -359,10 +371,12 @@ function renderList() {
   const { keys, groups } = groupItems(filtered, groupBy);
   return `
     <div class="topbar">
-      <div><h1>${glyph("box")} Home Inventory</h1><p class="muted tiny">${items.length} items · ${fmtMoney(totalValue(items))} total value</p></div>
-      ${canEdit() ? `<button class="btn" data-add>Add item</button>` : ""}
+      <div><h1>${glyph("box")} Home Inventory</h1>${loadFailed ? "" : `<p class="muted tiny">${items.length} items · ${fmtMoney(totalValue(items))} total value</p>`}</div>
+      ${canEdit() && !loadFailed ? `<button class="btn" data-add>Add item</button>` : ""}
     </div>
+    ${loadFailed ? `<div class="load-error" data-testid="load-error" role="alert"><span>Couldn’t load the inventory.</span> <button type="button" class="load-error-retry" data-testid="load-retry">Try again</button></div>` : ""}
     ${error ? `<div class="error">${esc(error)}</div>` : ""}
+    ${loadFailed ? "" : `
     <div class="search"><input id="search" placeholder="Search by name, location, serial…" value="${esc(query)}" autocomplete="off"></div>
     <div class="toolbar">
       <div class="seg">
@@ -375,6 +389,7 @@ function renderList() {
       <div class="group-head">${glyph(groupBy === "location" ? "location" : "tag")} ${esc(k)} <span class="muted" style="font-weight:600">· ${groups[k].length}</span></div>
       <div class="grid">${groups[k].map(renderCard).join("")}</div>
     `).join("") : `<div class="empty">${items.length ? "No items match your search." : "Nothing catalogued yet. Add your first item."}</div>`}
+    `}
   `;
 }
 
@@ -446,6 +461,7 @@ document.addEventListener("input", e => {
 document.addEventListener("click", e => {
   const t = e.target.closest("button, [data-open]");
   if (!t) return;
+  if (t.dataset.testid === "load-retry") return init();
   if (t.dataset.open) { selectedId = t.dataset.open; error = ""; render(); return; }
   if (t.dataset.back !== undefined) {
     // Closing is the retry boundary: drop a failed load so reopening refetches,
