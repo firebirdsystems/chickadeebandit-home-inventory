@@ -268,7 +268,13 @@ async function submitItem(form) {
     let thumbId = null;
     const file = document.getElementById("f-photo")?.files?.[0];
     // The hub keeps a small copy with the photo, for the grid.
-    if (file) { const up = await files.upload(file, { thumbnail: true }); photoId = up.id; thumbId = up.thumbnailId ?? null; }
+    // A save that fails after the upload leaves the form open: pressing save
+    // again uses the photo already sent rather than sending it a second time.
+    if (file) {
+      if (form._sent?.file !== file) form._sent = { file, up: await files.upload(file, { thumbnail: true }) };
+      const up = form._sent.up;
+      photoId = up.id; thumbId = up.thumbnailId ?? null;
+    }
     // A new photo has its own small copy and no cutout. All four columns
     // change in the one UPDATE, so the hub reclaims the old photo and what was
     // made from it together.
