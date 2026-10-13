@@ -84,6 +84,39 @@
       ]
     },
     {
+      "name": "a new item and its first valuation are stored together in one batch",
+      "members": { "parent": "adult" },
+      "steps": [
+        {
+          "action": "batch",
+          "as": "parent",
+          "statements": [
+            {
+              "sql": "INSERT INTO app_home_inventory__items (id, name, location, category, value_cents, quantity, brand, model, serial, purchased_at, notes, photo_id, thumb_file_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              "params": ["i1", "Guitar", "Den", "general", 60000, 1, "", "", "", "", "", "", null, "{{parent}}", "Parent", "2026-01-01T00:00:00Z"]
+            },
+            {
+              "sql": "INSERT INTO app_home_inventory__valuations (id, item_id, value_cents, note, recorded_by, recorded_by_name, recorded_at) VALUES (?,?,?,?,?,?,?)",
+              "params": ["v1", "i1", 60000, "Initial value", "{{parent}}", "Parent", "2026-01-01T00:00:00Z"]
+            }
+          ],
+          "expect": { "status": 200, "changed": [1, 1] }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "SELECT id, name, value_cents FROM app_home_inventory__items",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "i1", "name": "Guitar", "value_cents": 60000 }] }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "SELECT id, item_id, value_cents FROM app_home_inventory__valuations",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "v1", "item_id": "i1", "value_cents": 60000 }] }
+        }
+      ]
+    },
+    {
       "name": "deleting an item removes its valuation history with it",
       "members": { "parent": "adult" },
       "steps": [

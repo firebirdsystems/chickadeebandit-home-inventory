@@ -109,6 +109,14 @@ async function db(sql, params = []) {
   if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
   return json;
 }
+// Several statements as one request: all of them are stored, or none.
+async function dbBatch(statements) {
+  if (!DB) return { results: [] };
+  const res = await fetch(DB, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ statements }) });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
+  return json;
+}
 
 async function loadMembers() {
   if (!CONTEXT) { members = [{ id: "demo-1", name: "Alex", role: "adult" }, { id: "demo-2", name: "Jordan", role: "adult" }]; }
@@ -283,16 +291,37 @@ async function submitItem(form) {
     if (id) {
       const it = items.find(x => x.id === id);
       const prevValue = it.value_cents;
-      if (DB) await db(`UPDATE app_home_inventory__items SET name=?, location=?, category=?, value_cents=?, quantity=?, brand=?, model=?, serial=?, purchased_at=?, notes=?, photo_id=?, ${newCopies}updated_at=? WHERE id=?`,
+      const { changed } = await db(`UPDATE app_home_inventory__items SET name=?, location=?, category=?, value_cents=?, quantity=?, brand=?, model=?, serial=?, purchased_at=?, notes=?, photo_id=?, ${newCopies}updated_at=? WHERE id=?`,
         [vals.name, vals.location, vals.category, vals.value_cents, vals.quantity, vals.brand, vals.model, vals.serial, vals.purchased_at, vals.notes, photoId, ...(file ? [thumbId] : []), nowIso(), id]);
-      Object.assign(it, vals, { photo_id: photoId }, file ? { thumb_file_id: thumbId, cutout_file_id: null, cutout_thumb_file_id: null } : {});
+      // No row changed: the item was deleted meanwhile and nothing was saved.
+      // The photo just sent has no row to name it, so it is discarded (its
+      // small copy goes with it), and the list is read again.
+      if (DB && !changed) {
+        if (file) files.delete(photoId).catch(() => {});
+        await loadData().catch(() => {});
+        closeModal(); showError("Couldn’t save the item — it has been removed.");
+        return;
+      }
+      // The item keeps its old value here until the valuation below is stored:
+      // if that write fails, saving again still sees the value as changed and
+      // records it. (This UPDATE cannot share a batch with the valuation: the
+      // hub takes an UPDATE of a table with declared file columns only alone.)
+      Object.assign(it, vals, { value_cents: prevValue, photo_id: photoId }, file ? { thumb_file_id: thumbId, cutout_file_id: null, cutout_thumb_file_id: null } : {});
       if (vals.value_cents !== prevValue) await addValuation(id, vals.value_cents, "Value updated");
+      it.value_cents = vals.value_cents;
     } else {
       const row = { id: uid("i"), ...vals, photo_id: photoId, thumb_file_id: thumbId, created_by: me.id, created_by_name: me.name, created_at: nowIso() };
-      if (DB) await db(`INSERT INTO app_home_inventory__items (id, name, location, category, value_cents, quantity, brand, model, serial, purchased_at, notes, photo_id, thumb_file_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [row.id, row.name, row.location, row.category, row.value_cents, row.quantity, row.brand, row.model, row.serial, row.purchased_at, row.notes, row.photo_id, row.thumb_file_id, row.created_by, row.created_by_name, row.created_at]);
+      // The item and its first valuation go in one batch, so a failure stores
+      // neither and saving again cannot add the item twice.
+      const first = row.value_cents ? { id: uid("vh"), item_id: row.id, value_cents: row.value_cents, note: "Initial value", recorded_by: me.id, recorded_by_name: me.name, recorded_at: row.created_at } : null;
+      await dbBatch([
+        { sql: `INSERT INTO app_home_inventory__items (id, name, location, category, value_cents, quantity, brand, model, serial, purchased_at, notes, photo_id, thumb_file_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          params: [row.id, row.name, row.location, row.category, row.value_cents, row.quantity, row.brand, row.model, row.serial, row.purchased_at, row.notes, row.photo_id, row.thumb_file_id, row.created_by, row.created_by_name, row.created_at] },
+        ...(first ? [{ sql: `INSERT INTO app_home_inventory__valuations (id, item_id, value_cents, note, recorded_by, recorded_by_name, recorded_at) VALUES (?,?,?,?,?,?,?)`,
+          params: [first.id, first.item_id, first.value_cents, first.note, first.recorded_by, first.recorded_by_name, first.recorded_at] }] : []),
+      ]);
       items = [...items, row];
-      if (row.value_cents) await addValuation(row.id, row.value_cents, "Initial value");
+      if (first) valuations = [...valuations, first];
       publish("home_inventory.item_added", { id: row.id, name: row.name });
     }
     closeModal(); render();
