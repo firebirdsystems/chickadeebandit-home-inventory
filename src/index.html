@@ -353,8 +353,11 @@ async function submitItem(form) {
     // does. If the form was changed since, those changes go through the
     // ordinary edit of that item; a photo the stored row already names is no
     // longer a new one. Not there, or the read failed: the failure below.
+    // The id is ours: with the read-back failed, a UNIQUE answer may be this
+    // form's own first try, so nothing is known — "try again", not "already exists".
+    let readFailed = false;
     if (creating && outcomeUnknown(e)) {
-      const stored = (await db("SELECT * FROM app_home_inventory__items WHERE id=?", [form._ids.item]).catch(() => null))?.rows?.[0];
+      const stored = (await db("SELECT * FROM app_home_inventory__items WHERE id=?", [form._ids.item]).catch((readErr) => { console.error(readErr); readFailed = true; return null; }))?.rows?.[0];
       if (stored) {
         items = [...items.filter(x => x.id !== stored.id), stored];
         // Its first valuation was stored in the same batch.
@@ -377,7 +380,7 @@ async function submitItem(form) {
     // that follows an attempt of this form which may have been stored.
     if (step === "row" && !form._unsure && (e.status === 403 || e.status === 507)) { files.delete(form._sent.up.id).catch(() => {}); form._sent = null; }
     btn.disabled = false; btn.textContent = id ? "Save" : "Add item";
-    showError(step === "upload" && uploadRefused(e) && e.message ? e.message : writeFailed(e, "save the item"));
+    showError(step === "upload" && uploadRefused(e) && e.message ? e.message : writeFailed(readFailed ? new Error("create outcome unknown", { cause: e }) : e, "save the item"));
   }
 }
 
@@ -408,27 +411,47 @@ async function submitReval(form) {
   // value is a new row.
   const note = form["rv-note"].value.trim() || "Revalued";
   const pinId = (form._pins ??= {})[`${valueCents}|${note}`] ??= uid("vh");
+  const row = { id: pinId, item_id: id, value_cents: valueCents, note, recorded_by: me.id, recorded_by_name: me.name, recorded_at: nowIso() };
   try {
-    // Two requests: the hub takes an UPDATE of a table with declared file
-    // columns only alone, never in a batch. The value is set first and the
-    // history row added last, so recording again after a failure sets the same
-    // value and cannot add the history row twice.
-    if (DB) await db(`UPDATE app_home_inventory__items SET value_cents=?, updated_at=? WHERE id=?`, [valueCents, nowIso(), id]);
-    await addValuation(id, valueCents, note, pinId);
+    // One batch: the value and its history row are stored together, or
+    // neither. (The hub batches an UPDATE of this table as long as it assigns
+    // none of the declared file columns.) An item that is gone, or that the hub
+    // will not let this member change, matches nothing: the batch answers 409.
+    await dbBatch([
+      { sql: `UPDATE app_home_inventory__items SET value_cents=?, updated_at=? WHERE id=?`, params: [valueCents, row.recorded_at, id], requireChanges: true },
+      { sql: `INSERT INTO app_home_inventory__valuations (id, item_id, value_cents, note, recorded_by, recorded_by_name, recorded_at) VALUES (?,?,?,?,?,?,?)`,
+        params: [row.id, row.item_id, row.value_cents, row.note, row.recorded_by, row.recorded_by_name, row.recorded_at] },
+    ]);
+    valuations = [...valuations.filter(v => v.id !== row.id), row];
     it.value_cents = valueCents;
     closeModal(); render();
   } catch (e) {
     // The history row may have been stored without its answer arriving: it is
     // read by the id this form keeps for this value and note. There, the value
     // was recorded, and this is the saved path; otherwise the failure below.
-    const got = outcomeUnknown(e) ? (await db("SELECT * FROM app_home_inventory__valuations WHERE id=?", [pinId]).catch(() => null))?.rows?.[0] : null;
+    let readFailed = false;
+    const got = outcomeUnknown(e) ? (await db("SELECT * FROM app_home_inventory__valuations WHERE id=?", [pinId]).catch((readErr) => { console.error(readErr); readFailed = true; return null; }))?.rows?.[0] : null;
     if (got) {
       valuations = [...valuations.filter(v => v.id !== got.id), got];
       it.value_cents = valueCents;
       closeModal(); render();
       return;
     }
-    btn.disabled = false; btn.textContent = "Record"; showError(writeFailed(e, "record the value"));
+    // 409: the UPDATE matched nothing and nothing was stored. The re-read says
+    // which: no item is "removed"; an item still there means the hub's row
+    // policy refused this plain `WHERE id = ?` write. A failed re-read says
+    // neither: the form stays as typed to try again.
+    if (e?.status === 409) {
+      console.error("[home-inventory]", e);
+      const gone = await loadData().then(() => !items.some(x => x.id === id), () => undefined);
+      const line = failureLine(null, { action: "record the value", thing: "item", gone });
+      if (gone !== undefined) { closeModal(); showError(line); return; }
+      btn.disabled = false; btn.textContent = "Record"; showError(line);
+      return;
+    }
+    // The history id is ours: with the read-back failed, a UNIQUE answer may be
+    // this form's own first try — "try again", not "already exists".
+    btn.disabled = false; btn.textContent = "Record"; showError(writeFailed(readFailed ? new Error("record outcome unknown", { cause: e }) : e, "record the value"));
   }
 }
 
