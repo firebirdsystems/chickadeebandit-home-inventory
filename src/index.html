@@ -82,7 +82,7 @@
 import { esc, isAdult, hubConfirm, fmtMoney, formatRelativeDate, createFilesHelper, searchMatch, glyph } from "/hub-sdk.js";
 import {
   CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
-  shownPhotoId, tilePhotoId, cutoutRefusal,
+  shownPhotoId, tilePhotoId, cutoutRefusal, outcomeUnknown, rowDiffers,
 } from "./logic.js";
 
 const CONTEXT = window.__CONTEXT_URL ?? "";
@@ -274,8 +274,11 @@ async function submitItem(form) {
   // Which request is out: "upload" while the photo is being sent, "row" while
   // the write that would name a photo just sent is.
   let step = "";
+  // True only while the request that creates the item is out.
+  let creating = false;
+  let photoId = "";
   try {
-    let photoId = id ? (items.find(x => x.id === id)?.photo_id ?? "") : "";
+    photoId = id ? (items.find(x => x.id === id)?.photo_id ?? "") : "";
     let thumbId = null;
     const file = document.getElementById("f-photo")?.files?.[0];
     // The hub keeps a small copy with the photo, for the grid.
@@ -316,34 +319,64 @@ async function submitItem(form) {
       if (vals.value_cents !== prevValue) await addValuation(id, vals.value_cents, "Value updated");
       it.value_cents = vals.value_cents;
     } else {
-      const row = { id: uid("i"), ...vals, photo_id: photoId, thumb_file_id: thumbId, created_by: me.id, created_by_name: me.name, created_at: nowIso() };
+      // Both ids are made once for this form and sent again on every attempt,
+      // so an attempt that was stored without its answer arriving cannot be
+      // stored a second time under another id. They go when the form does.
+      form._ids ??= { item: uid("i"), valuation: uid("vh") };
+      const row = { id: form._ids.item, ...vals, photo_id: photoId, thumb_file_id: thumbId, created_by: me.id, created_by_name: me.name, created_at: nowIso() };
       // The item and its first valuation go in one batch, so a failure stores
       // neither and saving again cannot add the item twice.
-      const first = row.value_cents ? { id: uid("vh"), item_id: row.id, value_cents: row.value_cents, note: "Initial value", recorded_by: me.id, recorded_by_name: me.name, recorded_at: row.created_at } : null;
+      const first = row.value_cents ? { id: form._ids.valuation, item_id: row.id, value_cents: row.value_cents, note: "Initial value", recorded_by: me.id, recorded_by_name: me.name, recorded_at: row.created_at } : null;
+      creating = true;
       await dbBatch([
         { sql: `INSERT INTO app_home_inventory__items (id, name, location, category, value_cents, quantity, brand, model, serial, purchased_at, notes, photo_id, thumb_file_id, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           params: [row.id, row.name, row.location, row.category, row.value_cents, row.quantity, row.brand, row.model, row.serial, row.purchased_at, row.notes, row.photo_id, row.thumb_file_id, row.created_by, row.created_by_name, row.created_at] },
         ...(first ? [{ sql: `INSERT INTO app_home_inventory__valuations (id, item_id, value_cents, note, recorded_by, recorded_by_name, recorded_at) VALUES (?,?,?,?,?,?,?)`,
           params: [first.id, first.item_id, first.value_cents, first.note, first.recorded_by, first.recorded_by_name, first.recorded_at] }] : []),
       ]);
-      step = "";
+      step = ""; creating = false;
       items = [...items, row];
       if (first) valuations = [...valuations, first];
       publish("home_inventory.item_added", { id: row.id, name: row.name });
     }
     closeModal(); render();
   } catch (e) {
+    // The create may have been stored (this attempt, or an earlier one whose
+    // answer never arrived): the item is read by the id this form keeps, and
+    // the read decides. There, it is saved: it joins the list as a saved item
+    // does. If the form was changed since, those changes go through the
+    // ordinary edit of that item; a photo the stored row already names is no
+    // longer a new one. Not there, or the read failed: the failure below.
+    if (creating && outcomeUnknown(e)) {
+      const stored = (await db("SELECT * FROM app_home_inventory__items WHERE id=?", [form._ids.item]).catch(() => null))?.rows?.[0];
+      if (stored) {
+        items = [...items.filter(x => x.id !== stored.id), stored];
+        // Its first valuation was stored in the same batch.
+        const first = (await db("SELECT * FROM app_home_inventory__valuations WHERE id=?", [form._ids.valuation]).catch(() => null))?.rows?.[0];
+        if (first) valuations = [...valuations.filter(v => v.id !== first.id), first];
+        publish("home_inventory.item_added", { id: stored.id, name: stored.name });
+        if (form.isConnected && (rowDiffers(stored, vals) || (photoId && photoId !== stored.photo_id))) {
+          if (photoId === stored.photo_id) { if (form["f-photo"]) form["f-photo"].value = ""; form._sent = null; }
+          form.dataset.id = stored.id;
+          return submitItem(form);
+        }
+        closeModal(); render();
+        return;
+      }
+      form._unsure = true;
+    }
     // The hub refused the row and stored nothing, so no row names the photo
     // just sent: it is discarded, and saving again sends it afresh. Any other
-    // failure may have been stored, and keeps the photo.
-    if (step === "row" && (e.status === 403 || e.status === 507)) { files.delete(form._sent.up.id).catch(() => {}); form._sent = null; }
+    // failure may have been stored, and keeps the photo — as does a refusal
+    // that follows an attempt of this form which may have been stored.
+    if (step === "row" && !form._unsure && (e.status === 403 || e.status === 507)) { files.delete(form._sent.up.id).catch(() => {}); form._sent = null; }
     btn.disabled = false; btn.textContent = id ? "Save" : "Add item";
     showError(step === "upload" && uploadRefused(e) && e.message ? e.message : writeFailed(e, "Couldn’t save the item — try again."));
   }
 }
 
-async function addValuation(itemId, valueCents, note) {
-  const row = { id: uid("vh"), item_id: itemId, value_cents: valueCents, note, recorded_by: me.id, recorded_by_name: me.name, recorded_at: nowIso() };
+async function addValuation(itemId, valueCents, note, rowId = uid("vh")) {
+  const row = { id: rowId, item_id: itemId, value_cents: valueCents, note, recorded_by: me.id, recorded_by_name: me.name, recorded_at: nowIso() };
   if (DB) await db(`INSERT INTO app_home_inventory__valuations (id, item_id, value_cents, note, recorded_by, recorded_by_name, recorded_at) VALUES (?,?,?,?,?,?,?)`,
     [row.id, row.item_id, row.value_cents, row.note, row.recorded_by, row.recorded_by_name, row.recorded_at]);
   valuations = [...valuations, row];
@@ -364,16 +397,33 @@ async function submitReval(form) {
   const id = form.dataset.id; const it = items.find(x => x.id === id);
   const valueCents = toCents(form["rv-value"].value);
   const btn = modalEl.querySelector(".btn[type=submit]"); btn.disabled = true; btn.textContent = "Saving…";
+  // One history id per value and note typed in this form, sent again on every
+  // attempt: recording again cannot add the same row twice, and a changed
+  // value is a new row.
+  const note = form["rv-note"].value.trim() || "Revalued";
+  const pinId = (form._pins ??= {})[`${valueCents}|${note}`] ??= uid("vh");
   try {
     // Two requests: the hub takes an UPDATE of a table with declared file
     // columns only alone, never in a batch. The value is set first and the
     // history row added last, so recording again after a failure sets the same
     // value and cannot add the history row twice.
     if (DB) await db(`UPDATE app_home_inventory__items SET value_cents=?, updated_at=? WHERE id=?`, [valueCents, nowIso(), id]);
-    await addValuation(id, valueCents, form["rv-note"].value.trim() || "Revalued");
+    await addValuation(id, valueCents, note, pinId);
     it.value_cents = valueCents;
     closeModal(); render();
-  } catch (e) { btn.disabled = false; btn.textContent = "Record"; showError(writeFailed(e, "Couldn’t record the value — try again.")); }
+  } catch (e) {
+    // The history row may have been stored without its answer arriving: it is
+    // read by the id this form keeps for this value and note. There, the value
+    // was recorded, and this is the saved path; otherwise the failure below.
+    const got = outcomeUnknown(e) ? (await db("SELECT * FROM app_home_inventory__valuations WHERE id=?", [pinId]).catch(() => null))?.rows?.[0] : null;
+    if (got) {
+      valuations = [...valuations.filter(v => v.id !== got.id), got];
+      it.value_cents = valueCents;
+      closeModal(); render();
+      return;
+    }
+    btn.disabled = false; btn.textContent = "Record"; showError(writeFailed(e, "Couldn’t record the value — try again."));
+  }
 }
 
 /* ── photo background ── */

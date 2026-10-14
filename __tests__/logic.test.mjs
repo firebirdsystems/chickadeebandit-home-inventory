@@ -1,8 +1,31 @@
 import { describe, it, expect } from "vitest";
 import {
   CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
-  shownPhotoId, tilePhotoId, cutoutRefusal,
+  shownPhotoId, tilePhotoId, cutoutRefusal, outcomeUnknown, rowDiffers,
 } from "../src/logic.js";
+
+describe("outcomeUnknown", () => {
+  it("is true when no answer came back, and for a 400", () => {
+    expect(outcomeUnknown(new TypeError("Failed to fetch"))).toBe(true);
+    expect(outcomeUnknown(Object.assign(new Error("x"), { status: 400 }))).toBe(true);
+  });
+  it("is false for a refusal that stored nothing, and for other statuses", () => {
+    for (const status of [403, 507, 409, 500, 503, 200]) {
+      expect(outcomeUnknown(Object.assign(new Error("x"), { status }))).toBe(false);
+    }
+  });
+});
+
+describe("rowDiffers", () => {
+  const stored = { id: "i-1", name: "Drill", notes: null, value_cents: 2500, quantity: 1, created_by: "m1" };
+  it("is false when the form holds what is stored", () => {
+    expect(rowDiffers(stored, { name: "Drill", notes: "", value_cents: 2500, quantity: 1 })).toBe(false);
+  });
+  it("is true when a field was edited", () => {
+    expect(rowDiffers(stored, { name: "Drill", notes: "", value_cents: 3000, quantity: 1 })).toBe(true);
+    expect(rowDiffers(stored, { name: "Drill press", notes: "", value_cents: 2500, quantity: 1 })).toBe(true);
+  });
+});
 
 describe("dollars / toCents", () => {
   it("dollars formats cents", () => {

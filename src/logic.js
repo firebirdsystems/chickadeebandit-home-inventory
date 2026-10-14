@@ -66,6 +66,21 @@ export function cutoutRefusal(status, detail = null) {
 }
 
 /**
+ * Whether a failed write may have been stored all the same: no answer came
+ * back at all (the request threw, so the error carries no status), or the hub
+ * answered 400, which it also gives for a write that timed out after it was
+ * stored. A 403 or a 507 is a refusal: nothing was stored.
+ */
+export function outcomeUnknown(e) {
+  return e?.status == null || e.status === 400;
+}
+
+/** Whether any of the form's fields differs from the stored row's. */
+export function rowDiffers(stored, vals) {
+  return Object.keys(vals).some((k) => String(stored?.[k] ?? "") !== String(vals[k] ?? ""));
+}
+
+/**
  * The picture to draw where it is shown small: the small copy of whichever
  * picture is shown, else that picture itself. A cutout's small copy and the
  * photo's are different pictures, so neither stands in for the other.
