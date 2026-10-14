@@ -106,7 +106,7 @@ async function db(sql, params = []) {
   if (!DB) return { rows: [] };
   const res = await fetch(DB, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql, params }) });
   const json = await res.json().catch(() => null);
-  if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
+  if (!res.ok || !json || typeof json !== "object" || json.error) throw Object.assign(new Error(json?.error || "Couldn’t reach the hub. Try again."), { status: res.status, code: json?.code });
   return json;
 }
 // Several statements as one request: all of them are stored, or none.
@@ -114,7 +114,7 @@ async function dbBatch(statements) {
   if (!DB) return { results: [] };
   const res = await fetch(DB, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ statements }) });
   const json = await res.json().catch(() => null);
-  if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
+  if (!res.ok || !json || typeof json !== "object" || json.error) throw Object.assign(new Error(json?.error || "Couldn’t reach the hub. Try again."), { status: res.status, code: json?.code });
   return json;
 }
 
@@ -271,6 +271,9 @@ async function submitItem(form) {
     brand: form["f-brand"].value.trim(), model: form["f-model"].value.trim(),
     serial: form["f-serial"].value.trim(), purchased_at: form["f-purchased"].value, notes: form["f-notes"].value.trim(),
   };
+  // Which request is out: "upload" while the photo is being sent, "row" while
+  // the write that would name a photo just sent is.
+  let step = "";
   try {
     let photoId = id ? (items.find(x => x.id === id)?.photo_id ?? "") : "";
     let thumbId = null;
@@ -279,7 +282,9 @@ async function submitItem(form) {
     // A save that fails after the upload leaves the form open: pressing save
     // again uses the photo already sent rather than sending it a second time.
     if (file) {
+      step = "upload";
       if (form._sent?.file !== file) form._sent = { file, up: await files.upload(file, { thumbnail: true }) };
+      step = "row";
       const up = form._sent.up;
       photoId = up.id; thumbId = up.thumbnailId ?? null;
     }
@@ -293,6 +298,7 @@ async function submitItem(form) {
       const prevValue = it.value_cents;
       const { changed } = await db(`UPDATE app_home_inventory__items SET name=?, location=?, category=?, value_cents=?, quantity=?, brand=?, model=?, serial=?, purchased_at=?, notes=?, photo_id=?, ${newCopies}updated_at=? WHERE id=?`,
         [vals.name, vals.location, vals.category, vals.value_cents, vals.quantity, vals.brand, vals.model, vals.serial, vals.purchased_at, vals.notes, photoId, ...(file ? [thumbId] : []), nowIso(), id]);
+      step = "";
       // No row changed: the item was deleted meanwhile and nothing was saved.
       // The photo just sent has no row to name it, so it is discarded (its
       // small copy goes with it), and the list is read again.
@@ -320,12 +326,20 @@ async function submitItem(form) {
         ...(first ? [{ sql: `INSERT INTO app_home_inventory__valuations (id, item_id, value_cents, note, recorded_by, recorded_by_name, recorded_at) VALUES (?,?,?,?,?,?,?)`,
           params: [first.id, first.item_id, first.value_cents, first.note, first.recorded_by, first.recorded_by_name, first.recorded_at] }] : []),
       ]);
+      step = "";
       items = [...items, row];
       if (first) valuations = [...valuations, first];
       publish("home_inventory.item_added", { id: row.id, name: row.name });
     }
     closeModal(); render();
-  } catch (e) { btn.disabled = false; btn.textContent = id ? "Save" : "Add item"; showError(uploadRefused(e) && e.message ? e.message : writeFailed(e, "Couldn’t save the item — try again.")); }
+  } catch (e) {
+    // The hub refused the row and stored nothing, so no row names the photo
+    // just sent: it is discarded, and saving again sends it afresh. Any other
+    // failure may have been stored, and keeps the photo.
+    if (step === "row" && (e.status === 403 || e.status === 507)) { files.delete(form._sent.up.id).catch(() => {}); form._sent = null; }
+    btn.disabled = false; btn.textContent = id ? "Save" : "Add item";
+    showError(step === "upload" && uploadRefused(e) && e.message ? e.message : writeFailed(e, "Couldn’t save the item — try again."));
+  }
 }
 
 async function addValuation(itemId, valueCents, note) {
@@ -351,8 +365,12 @@ async function submitReval(form) {
   const valueCents = toCents(form["rv-value"].value);
   const btn = modalEl.querySelector(".btn[type=submit]"); btn.disabled = true; btn.textContent = "Saving…";
   try {
-    await addValuation(id, valueCents, form["rv-note"].value.trim() || "Revalued");
+    // Two requests: the hub takes an UPDATE of a table with declared file
+    // columns only alone, never in a batch. The value is set first and the
+    // history row added last, so recording again after a failure sets the same
+    // value and cannot add the history row twice.
     if (DB) await db(`UPDATE app_home_inventory__items SET value_cents=?, updated_at=? WHERE id=?`, [valueCents, nowIso(), id]);
+    await addValuation(id, valueCents, form["rv-note"].value.trim() || "Revalued");
     it.value_cents = valueCents;
     closeModal(); render();
   } catch (e) { btn.disabled = false; btn.textContent = "Record"; showError(writeFailed(e, "Couldn’t record the value — try again.")); }
@@ -364,16 +382,17 @@ async function removeBackground(id) {
   if (!it?.photo_id || cutoutBusy) return;
   const photoId = it.photo_id;
   cutoutBusy = id; error = ""; render();
+  let cut = null;
   try {
     // The hub also keeps a small copy of the cutout, for the grid.
-    const cut = await files.cutout(photoId, { thumbnail: true });
+    cut = await files.cutout(photoId, { thumbnail: true });
     const smallId = cut.thumbnailId ?? null;
     // Kept only if the item still shows the photo it was made from. A cutout of
     // a photo replaced in the meantime is reclaimed by the hub with that photo.
     const { changed } = await db("UPDATE app_home_inventory__items SET cutout_file_id=?, cutout_thumb_file_id=?, updated_at=? WHERE id=? AND photo_id=?",
       [cut.id, smallId, nowIso(), id, photoId]);
     if (changed) Object.assign(it, { cutout_file_id: cut.id, cutout_thumb_file_id: smallId });
-  } catch (e) { error = e.status ? cutoutRefusal(e.status, e.detail) : writeFailed(e, "Couldn’t remove the background — try again."); }
+  } catch (e) { error = e.status && !cut ? cutoutRefusal(e.status, e.detail) : writeFailed(e, "Couldn’t remove the background — try again."); }
   cutoutBusy = ""; render();
 }
 
