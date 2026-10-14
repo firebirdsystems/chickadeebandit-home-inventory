@@ -69,10 +69,11 @@ export function cutoutRefusal(status, detail = null) {
  * Whether a failed write may have been stored all the same: no answer came
  * back at all (the request threw, so the error carries no status), or the hub
  * answered 400, which it also gives for a write that timed out after it was
- * stored. A 403 or a 507 is a refusal: nothing was stored.
+ * stored, or failed on its side (a 5xx) with the write possibly stored first.
+ * A 403 or a 507 is a refusal: nothing was stored.
  */
 export function outcomeUnknown(e) {
-  return e?.status == null || e.status === 400;
+  return e?.status == null || e.status === 400 || (e.status >= 500 && e.status !== 507);
 }
 
 /** Whether any of the form's fields differs from the stored row's. */

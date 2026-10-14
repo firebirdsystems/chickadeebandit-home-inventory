@@ -5,12 +5,17 @@ import {
 } from "../src/logic.js";
 
 describe("outcomeUnknown", () => {
+  it("is true for a server failure, which may have come after the write", () => {
+    for (const status of [500, 502, 503]) {
+      expect(outcomeUnknown(Object.assign(new Error("x"), { status }))).toBe(true);
+    }
+  });
   it("is true when no answer came back, and for a 400", () => {
     expect(outcomeUnknown(new TypeError("Failed to fetch"))).toBe(true);
     expect(outcomeUnknown(Object.assign(new Error("x"), { status: 400 }))).toBe(true);
   });
   it("is false for a refusal that stored nothing, and for other statuses", () => {
-    for (const status of [403, 507, 409, 500, 503, 200]) {
+    for (const status of [403, 507, 409, 200]) {
       expect(outcomeUnknown(Object.assign(new Error("x"), { status }))).toBe(false);
     }
   });
