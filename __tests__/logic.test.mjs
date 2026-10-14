@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
-  shownPhotoId, tilePhotoId, cutoutRefusal, outcomeUnknown, rowDiffers,
+  shownPhotoId, tilePhotoId, cutoutRefusal, outcomeUnknown, rowDiffers, failureLine,
 } from "../src/logic.js";
 
 describe("outcomeUnknown", () => {
@@ -132,5 +132,39 @@ describe("tilePhotoId", () => {
     // A cutout with no small copy of its own is drawn whole.
     expect(tilePhotoId({ photo_id: "p1", thumb_file_id: "t1", cutout_file_id: "c1", cutout_thumb_file_id: null })).toBe("c1");
     expect(tilePhotoId({ photo_id: "p1", thumb_file_id: "t1", cutout_file_id: "c1" })).toBe("c1");
+  });
+});
+
+describe("failureLine", () => {
+  const err = (props) => Object.assign(new Error("hub text that never reaches the screen"), props);
+  const opts = { action: "save the item", thing: "item" };
+  it("says a duplicate already exists, by code or by the hub's text", () => {
+    expect(failureLine(err({ status: 400, code: "UNIQUE_CONSTRAINT" }), opts)).toBe("That item already exists.");
+    expect(failureLine(new Error("UNIQUE constraint failed: x.id"), opts)).toBe("That item already exists.");
+  });
+  it("says a 403 is not allowed", () => {
+    expect(failureLine(err({ status: 403 }), opts)).toBe("You don’t have permission to save the item.");
+  });
+  it("says a 507 is storage full", () => {
+    expect(failureLine(err({ status: 507 }), opts)).toBe("The household’s storage is full — free up space first.");
+  });
+  it("says removed for a 404, or when the re-read found no row", () => {
+    expect(failureLine(err({ status: 404 }), opts)).toBe("This item has been removed.");
+    expect(failureLine(null, { ...opts, gone: true })).toBe("This item has been removed.");
+    expect(failureLine(err({ status: 409 }), { ...opts, gone: true })).toBe("This item has been removed.");
+  });
+  it("says changed by someone else for a 409", () => {
+    expect(failureLine(err({ status: 409 }), opts)).toBe("This item was changed by someone else — check it first.");
+  });
+  it("says a plain write that changed nothing while the row is still there was refused", () => {
+    expect(failureLine(null, { ...opts, gone: false })).toBe("You don’t have permission to save the item.");
+  });
+  it("says try again, neither removed nor changed, when the re-read after changed: 0 failed", () => {
+    expect(failureLine(null, { ...opts, gone: undefined })).toBe("Couldn’t save the item — try again.");
+  });
+  it("says try again when no answer came, the hub failed, or any other 400", () => {
+    for (const e of [new TypeError("Failed to fetch"), err({ status: 500 }), err({ status: 503 }), err({ status: 400 })]) {
+      expect(failureLine(e, opts)).toBe("Couldn’t save the item — try again.");
+    }
   });
 });

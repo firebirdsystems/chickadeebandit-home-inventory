@@ -82,7 +82,7 @@
 import { esc, isAdult, hubConfirm, fmtMoney, formatRelativeDate, createFilesHelper, searchMatch, glyph } from "/hub-sdk.js";
 import {
   CATEGORIES, dollars, toCents, searchableFields, totalValue, knownLocations, groupItems,
-  shownPhotoId, tilePhotoId, cutoutRefusal, outcomeUnknown, rowDiffers,
+  shownPhotoId, tilePhotoId, cutoutRefusal, outcomeUnknown, rowDiffers, failureLine,
 } from "./logic.js";
 
 const CONTEXT = window.__CONTEXT_URL ?? "";
@@ -195,9 +195,10 @@ function showError(msg) { error = msg; render(); }
 // A failed write is said in this app's words; the error itself goes to the
 // console. A photo the hub would not take (too large, a type it does not
 // store, no storage left) keeps the hub's wording, which says what to change.
-function writeFailed(e, line) {
+// `action` names what failed ("save the item"); `failureLine` picks the line.
+function writeFailed(e, action) {
   console.error("[home-inventory]", e);
-  return line;
+  return failureLine(e, { action, thing: "item" });
 }
 const uploadRefused = (e) => e?.status === 507 || (e?.status >= 400 && e?.status < 500);
 
@@ -302,13 +303,18 @@ async function submitItem(form) {
       const { changed } = await db(`UPDATE app_home_inventory__items SET name=?, location=?, category=?, value_cents=?, quantity=?, brand=?, model=?, serial=?, purchased_at=?, notes=?, photo_id=?, ${newCopies}updated_at=? WHERE id=?`,
         [vals.name, vals.location, vals.category, vals.value_cents, vals.quantity, vals.brand, vals.model, vals.serial, vals.purchased_at, vals.notes, photoId, ...(file ? [thumbId] : []), nowIso(), id]);
       step = "";
-      // No row changed: the item was deleted meanwhile and nothing was saved.
-      // The photo just sent has no row to name it, so it is discarded (its
-      // small copy goes with it), and the list is read again.
+      // No row changed: nothing was saved. The photo just sent has no row to
+      // name it, so it is discarded (its small copy goes with it), and the
+      // list is read again.
       if (DB && !changed) {
-        if (file) files.delete(photoId).catch(() => {});
-        await loadData().catch(() => {});
-        closeModal(); showError("Couldn’t save the item — it has been removed.");
+        if (file) { files.delete(photoId).catch(() => {}); form._sent = null; }
+        // The re-read says which: no row is "removed"; a row still there means
+        // the hub's row policy refused this plain `WHERE id = ?` write. A
+        // failed re-read says neither: the form stays as typed to try again.
+        const gone = await loadData().then(() => !items.some(x => x.id === id), () => undefined);
+        const line = failureLine(null, { action: "save the item", thing: "item", gone });
+        if (gone === undefined) { btn.disabled = false; btn.textContent = "Save"; showError(line); return; }
+        closeModal(); showError(line);
         return;
       }
       // The item keeps its old value here until the valuation below is stored:
@@ -371,7 +377,7 @@ async function submitItem(form) {
     // that follows an attempt of this form which may have been stored.
     if (step === "row" && !form._unsure && (e.status === 403 || e.status === 507)) { files.delete(form._sent.up.id).catch(() => {}); form._sent = null; }
     btn.disabled = false; btn.textContent = id ? "Save" : "Add item";
-    showError(step === "upload" && uploadRefused(e) && e.message ? e.message : writeFailed(e, "Couldn’t save the item — try again."));
+    showError(step === "upload" && uploadRefused(e) && e.message ? e.message : writeFailed(e, "save the item"));
   }
 }
 
@@ -422,7 +428,7 @@ async function submitReval(form) {
       closeModal(); render();
       return;
     }
-    btn.disabled = false; btn.textContent = "Record"; showError(writeFailed(e, "Couldn’t record the value — try again."));
+    btn.disabled = false; btn.textContent = "Record"; showError(writeFailed(e, "record the value"));
   }
 }
 
@@ -442,7 +448,7 @@ async function removeBackground(id) {
     const { changed } = await db("UPDATE app_home_inventory__items SET cutout_file_id=?, cutout_thumb_file_id=?, updated_at=? WHERE id=? AND photo_id=?",
       [cut.id, smallId, nowIso(), id, photoId]);
     if (changed) Object.assign(it, { cutout_file_id: cut.id, cutout_thumb_file_id: smallId });
-  } catch (e) { error = e.status && !cut ? cutoutRefusal(e.status, e.detail) : writeFailed(e, "Couldn’t remove the background — try again."); }
+  } catch (e) { error = e.status && !cut ? cutoutRefusal(e.status, e.detail) : writeFailed(e, "remove the background"); }
   cutoutBusy = ""; render();
 }
 
@@ -455,7 +461,7 @@ async function restoreBackground(id) {
     // The photo is untouched.
     await db("UPDATE app_home_inventory__items SET cutout_file_id=NULL, cutout_thumb_file_id=NULL, updated_at=? WHERE id=?", [nowIso(), id]);
     Object.assign(it, { cutout_file_id: null, cutout_thumb_file_id: null });
-  } catch (e) { error = writeFailed(e, "Couldn’t restore the background — try again."); }
+  } catch (e) { error = writeFailed(e, "restore the background"); }
   cutoutBusy = ""; render();
 }
 
@@ -473,7 +479,7 @@ async function deleteItem(id) {
     if (DB) await db("DELETE FROM app_home_inventory__items WHERE id=?", [id]);
     items = items.filter(x => x.id !== id); valuations = valuations.filter(v => v.item_id !== id);
     selectedId = null; render();
-  } catch (e) { showError(writeFailed(e, "Couldn’t delete the item — try again.")); }
+  } catch (e) { showError(writeFailed(e, "delete the item")); }
 }
 
 /* ── render ── */

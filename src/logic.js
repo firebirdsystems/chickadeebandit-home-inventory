@@ -76,6 +76,25 @@ export function outcomeUnknown(e) {
   return e?.status == null || e.status === 400 || (e.status >= 500 && e.status !== 507);
 }
 
+/**
+ * The line a failed write shows. "Try again" only where trying again can work:
+ * a refusal or a row that is gone says what happened instead. `gone` is the
+ * caller's re-read after a plain `WHERE id = ?` write that changed nothing
+ * (true: no row; false: the row is there, so the row policy refused it;
+ * undefined: the re-read failed, so nothing is known). Without it a 404 is
+ * "removed" and a 409 "changed by someone else". Never the hub's text.
+ */
+export function failureLine(e, { action, thing, gone } = {}) {
+  if (gone === true) return `This ${thing} has been removed.`;
+  if (gone === false) return `You don’t have permission to ${action}.`;
+  if (e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(e?.message ?? "")) return `That ${thing} already exists.`;
+  if (e?.status === 403) return `You don’t have permission to ${action}.`;
+  if (e?.status === 507) return "The household’s storage is full — free up space first.";
+  if (e?.status === 404) return `This ${thing} has been removed.`;
+  if (e?.status === 409) return `This ${thing} was changed by someone else — check it first.`;
+  return `Couldn’t ${action} — try again.`;
+}
+
 /** Whether any of the form's fields differs from the stored row's. */
 export function rowDiffers(stored, vals) {
   return Object.keys(vals).some((k) => String(stored?.[k] ?? "") !== String(vals[k] ?? ""));
