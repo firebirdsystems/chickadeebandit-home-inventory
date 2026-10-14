@@ -1,7 +1,7 @@
 {
   "scenarios": [
     {
-      "name": "serial numbers are masked for child members but visible to adults",
+      "name": "serial numbers are visible to every member, a child included",
       "members": { "parent": "adult", "kid": "child" },
       "steps": [
         {
@@ -21,7 +21,7 @@
           "as": "kid",
           "sql": "SELECT id, name, location, serial FROM app_home_inventory__items WHERE id = ?",
           "params": ["i1"],
-          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "name": "Laptop", "location": "Office desk", "serial": null }] }
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "name": "Laptop", "location": "Office desk", "serial": "SN-12345" }] }
         }
       ]
     },
@@ -224,6 +224,62 @@
           "subject_id": "i1",
           "payload": { "name": "Laptop", "category": "electronics" },
           "expect": { "status": 201 }
+        }
+      ]
+    },
+    {
+      "name": "in a shared space every adult co-owner catalogues and edits items and reads serials; a granted guest can look things up but not write",
+      "context": "shared_space",
+      "members": { "steward": "admin", "coowner": "adult", "guest": "guest" },
+      "granted": ["guest"],
+      "steps": [
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "INSERT INTO app_home_inventory__items (id, name, category, location, serial, value_cents, created_by, created_by_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "params": ["i1", "Outboard motor", "outdoor", "Boathouse", "SN-OB-77", 250000, "{{steward}}", "Steward", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "coowner",
+          "sql": "SELECT serial FROM app_home_inventory__items WHERE id = ?",
+          "params": ["i1"],
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "serial": "SN-OB-77" }] }
+        },
+        {
+          "action": "db",
+          "as": "coowner",
+          "sql": "UPDATE app_home_inventory__items SET location = ?, serial = ?, updated_at = ? WHERE id = ?",
+          "params": ["Garage", "SN-OB-77", "2026-01-02T00:00:00Z", "i1"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "coowner",
+          "sql": "INSERT INTO app_home_inventory__items (id, name, category, location, created_by, created_by_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          "params": ["i2", "Kayak", "outdoor", "Dock", "{{coowner}}", "Co-owner", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "SELECT location, serial FROM app_home_inventory__items WHERE id = ?",
+          "params": ["i1"],
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "location": "Garage", "serial": "SN-OB-77" }] }
+        },
+        {
+          "action": "db",
+          "as": "guest",
+          "sql": "SELECT id FROM app_home_inventory__items",
+          "expect": { "status": 200, "rowCount": 2 }
+        },
+        {
+          "action": "db",
+          "as": "guest",
+          "sql": "UPDATE app_home_inventory__items SET location = ? WHERE id = ?",
+          "params": ["Lost", "i1"],
+          "expect": { "status": 403 }
         }
       ]
     }
