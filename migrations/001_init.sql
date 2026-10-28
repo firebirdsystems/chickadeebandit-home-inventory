@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS app_home_inventory__items (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL PRIMARY KEY,
   name TEXT NOT NULL,
   category TEXT NOT NULL DEFAULT 'general',
   location TEXT DEFAULT '',
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS app_home_inventory__items (
 );
 
 CREATE TABLE IF NOT EXISTS app_home_inventory__valuations (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL PRIMARY KEY,
   item_id TEXT NOT NULL,
   value_cents INTEGER NOT NULL DEFAULT 0,
   note TEXT DEFAULT '',
